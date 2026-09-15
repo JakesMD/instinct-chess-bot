@@ -1,0 +1,10 @@
+{
+	"name": "instinct-chess-bot-dev",
+	"build": {
+		"dockerfile": "../Containerfile",
+		"context": "..",
+		"target": "base"
+	},
+	"workspaceFolder": "/root",
+	"workspaceMount": "source=${localWorkspaceFolder},target=/root,type=bind"
+}

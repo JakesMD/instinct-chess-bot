@@ -1,0 +1,116 @@
+env:
+  - .env
+
+vars:
+  - PYTHONUNBUFFERED: 1
+  - VAST: '{{.VAST_USER}}@{{.VAST_IP}}'
+
+tasks:
+  vast:log:
+    info: Streams the remote training log.
+    steps:
+      - run: ssh -p {{.VAST_PORT}} {{.VAST}} "tail -f /root/train.log"
+
+  vast:checkpoint:
+    info: Pulls the current checkpoint from the remote instance without stopping training.
+    steps:
+      - run: rsync -av --partial --partial-dir=.rsync-partial -e "ssh -p {{.VAST_PORT}} -o ServerAliveInterval=10 -o ServerAliveCountMax=6" {{.VAST}}:/root/train/weights/model.ckpt.pt train/weights/model.ckpt.pt
+
+  vast:stop:
+    info: Sends SIGINT to the remote train.py then pulls the saved model weights.
+    steps:
+      - run: ssh -p {{.VAST_PORT}} {{.VAST}} "pgrep -f train.py"
+        into:
+          - PID: stdout
+      - run: ssh -p {{.VAST_PORT}} {{.VAST}} "kill -INT {{.PID}}"
+      - run: ssh -p {{.VAST_PORT}} {{.VAST}} "while kill -0 {{.PID}} 2>/dev/null; do sleep 2; done"
+      - run: rsync --partial --partial-dir=.rsync-partial -e "ssh -p {{.VAST_PORT}} -o ServerAliveInterval=10 -o ServerAliveCountMax=6" {{.VAST}}:/root/train/weights/model.pt instinct_chess_bot/weights/model.pt
+
+  image:build:
+    info: Builds the training image.
+    steps:
+      - run: docker buildx build --platform linux/amd64 -f Containerfile --target training -t ghcr.io/jakesmd/instinct-chess-trainer:latest --load .
+
+  image:push:
+    info: Pushes the training image to GHCR.
+    steps:
+      - run: docker push ghcr.io/jakesmd/instinct-chess-trainer:latest
+
+  data:push:
+    info: Zips the converted .npy files and pushes them to GHCR.
+    dir: train/data
+    steps:
+      - run: python3 -c "import numpy as np; print(np.load('train_x.npy', mmap_mode='r').shape[0])"
+        into:
+          - TRAIN_RECORDS: stdout | trim
+      - run: python3 -c "import numpy as np; print(np.load('val_x.npy', mmap_mode='r').shape[0])"
+        into:
+          - VAL_RECORDS: stdout | trim
+      - run: ls bags/train_action_value_*.bag | sed -E 's/.*_([0-9]{5})\.bag/\1/' | sort -n | head -1
+        into:
+          - MIN_SHARD: stdout | trim
+      - run: ls bags/train_action_value_*.bag | sed -E 's/.*_([0-9]{5})\.bag/\1/' | sort -n | tail -1
+        into:
+          - MAX_SHARD: stdout | trim
+      - run: printf "%s-%sof02148" {{.MIN_SHARD}} {{.MAX_SHARD}}
+        into:
+          - TRAIN_SHARDS: stdout | trim
+      - run: zip -j instinct-chess-data.zip train_x.npy train_y.npy val_x.npy val_y.npy ATTRIBUTION.txt
+      - run: >
+          oras push ghcr.io/jakesmd/instinct-chess-data:latest instinct-chess-data.zip
+          --annotation "chess.dataset.train_records={{.TRAIN_RECORDS}}"
+          --annotation "chess.dataset.val_records={{.VAL_RECORDS}}"
+          --annotation "chess.dataset.train_shards={{.TRAIN_SHARDS}}"
+      - run: rm instinct-chess-data.zip
+
+  data:pull:
+    info: Pulls and unzips the prebuilt .npy training data from GHCR.
+    if: '[ ! -f data/train_x.npy ]'
+    dir: train
+    steps:
+      - run: mkdir -p data
+      - run: GODEBUG=http2client=0 oras manifest fetch ghcr.io/jakesmd/instinct-chess-data:latest | jq -r '.layers[0].digest'
+        into:
+          - DIGEST: stdout | trim
+      - run: GODEBUG=http2client=0 oras manifest fetch ghcr.io/jakesmd/instinct-chess-data:latest | jq -r '.layers[0].size'
+        into:
+          - SIZE: stdout | trim
+      - run: >
+          until [ "$(wc -c < data/instinct-chess-data.zip 2>/dev/null | tr -d ' ' || echo 0)" -eq {{.SIZE}} ]; do
+          TOKEN=$(curl --http1.1 -s "https://ghcr.io/token?service=ghcr.io&scope=repository:jakesmd/instinct-chess-data:pull" | jq -r .token);
+          curl --http1.1 -sSL -C - --retry 5 --retry-delay 3 -H "Authorization: Bearer $TOKEN" -o data/instinct-chess-data.zip "https://ghcr.io/v2/jakesmd/instinct-chess-data/blobs/{{.DIGEST}}";
+          done
+      - run: unzip -o data/instinct-chess-data.zip -d data
+      - run: rm data/instinct-chess-data.zip
+
+  data:gen:
+    info: Downloads the raw .bag files and converts them to .npy files.
+    dir: train
+    steps:
+      - get:
+          - NUM_TRAIN_BAGS:
+              default: 36
+          - MAX_VAL_RECORDS:
+              default: 200000
+          - MAX_TRAIN_RECORDS:
+              default: 1000000000
+      - run: mkdir -p data/bags
+      - run: curl -# -o data/bags/test_action_value.bag "https://storage.googleapis.com/searchless_chess/data/test/action_value_data.bag"
+        if: '[ ! -f data/bags/test_action_value.bag ]'
+      - run: seq -f "%05g" 0 $(({{.NUM_TRAIN_BAGS}} - 1))
+        into:
+          - ITEMS: stdout | lines
+      - loop: .ITEMS
+        steps:
+          - run: curl -# -o data/bags/train_action_value_{{.ITEM}}.bag "https://storage.googleapis.com/searchless_chess/data/train/action_value-{{.ITEM}}-of-02148_data.bag"
+            if: '[ ! -f data/bags/train_action_value_{{.ITEM}}.bag ]'
+      - run: rm -rf data/train_x.npy data/train_y.npy data/val_x.npy data/val_y.npy
+      - run: python3 convert_bag_to_npy.py
+
+  train:
+    info: Trains the model.
+    dir: train
+    steps:
+      - call: data:pull
+      - run: mkdir -p weights
+      - run: python3 train.py

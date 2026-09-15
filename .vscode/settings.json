@@ -1,0 +1,12 @@
+{
+    "files.exclude": {
+        "**/__init__.py": true,
+        "**/__pycache__": true,
+        ".cache/": true,
+        ".docker/": true,
+        ".vscode-server/": true,
+        "*.egg-info": true,
+        ".gitconfig": true,
+        ".venv": true,
+    }
+}

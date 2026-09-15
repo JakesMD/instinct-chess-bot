@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "instinct-chess-bot"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "chess",
+    "torch>=2.0",
+]
+
+[project.optional-dependencies]
+train = ["numpy", "apache-beam"]
+lichess = [
+    "berserk",
+    "python-dotenv",
+    "lichess-bot-runner @ git+https://github.com/JakesMD/lichess-bot-runner.git",
+]
+
+[project.scripts]
+instinct-chess-bot = "instinct_chess_bot.engine:main"
+
+[tool.setuptools]
+packages = ["instinct_chess_bot"]
+
+[tool.setuptools.package-data]
+instinct_chess_bot = ["weights/*.pt"]

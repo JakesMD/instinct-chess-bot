@@ -1,0 +1,21 @@
+Derived data notice
+====================
+
+The .npy files in this archive (train_x.npy, train_y.npy, val_x.npy,
+val_y.npy) are a tokenized re-encoding of the ChessBench dataset released by
+Google DeepMind:
+
+  Source:  https://github.com/google-deepmind/searchless_chess
+  Paper:   Ruoss et al., "Grandmaster-Level Chess Without Search"
+           (DeepMind, 2024, arXiv:2402.04494)
+  License: data released under CC-BY (see the searchless_chess repo for the
+           authoritative license terms)
+
+Changes made: raw (FEN, move, win-probability) records were converted from
+the original .bag format into fixed-length tokenized uint16/float32 arrays
+via instinct_chess_bot/convert_bag_to_npy.py in this repo. No content was
+added or removed beyond this re-encoding.
+
+This archive is a redistribution of a derivative of that dataset under the
+same CC-BY terms; attribution to Google DeepMind / the ChessBench authors
+must be preserved by downstream users.
